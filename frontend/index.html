@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Voice Clinic Agent — Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+    button { font-size: 16px; padding: 10px 18px; margin-right: 8px; cursor: pointer; }
+    #log { margin-top: 24px; padding: 12px; background: #f4f4f4; border-radius: 8px; min-height: 120px; white-space: pre-wrap; }
+    .doctor-panel { margin-top: 32px; padding-top: 16px; border-top: 1px solid #ddd; }
+    input { padding: 6px; }
+  </style>
+</head>
+<body>
+  <h2>Voice Clinic Agent — Demo</h2>
+  <p>Push-to-talk: hold the button, speak, release to send.</p>
+
+  <button id="talkBtn">🎤 Hold to talk</button>
+  <span id="status">idle</span>
+  <div id="log"></div>
+
+  <div class="doctor-panel">
+    <h3>Doctor panel (simulated)</h3>
+    <p>Paste an appointment ID (from the call log above) and trigger a reschedule to see the ping-pong kick in on the next call turn.</p>
+    <input id="apptId" placeholder="appointment id" />
+    <button id="rescheduleBtn">Reschedule this appointment</button>
+    <div id="doctorLog"></div>
+  </div>
+
+<script>
+const doctorId = "demo-doctor"; // for a real app, look this up properly
+const ws = new WebSocket(`ws://${location.host}/ws/call/${doctorId}`);
+ws.binaryType = "arraybuffer";
+
+const log = document.getElementById("log");
+function addLine(text) {
+  log.textContent += text + "\n";
+  log.scrollTop = log.scrollHeight;
+}
+
+let pendingTranscript = null;
+ws.onmessage = (evt) => {
+  if (typeof evt.data === "string") {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === "transcript") addLine("Agent: " + msg.text);
+    return;
+  }
+  // binary = mp3 audio reply
+  const blob = new Blob([evt.data], { type: "audio/mpeg" });
+  const url = URL.createObjectURL(blob);
+  new Audio(url).play();
+};
+
+let mediaRecorder, chunks = [];
+const talkBtn = document.getElementById("talkBtn");
+const statusEl = document.getElementById("status");
+
+async function startRecording() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  chunks = [];
+  mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+  mediaRecorder.onstop = async () => {
+    const blob = new Blob(chunks, { type: "audio/webm" });
+    addLine("You: (sent " + Math.round(blob.size / 1024) + " KB audio)");
+    ws.send(await blob.arrayBuffer());
+  };
+  mediaRecorder.start();
+  statusEl.textContent = "listening...";
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  statusEl.textContent = "idle";
+}
+
+talkBtn.addEventListener("mousedown", startRecording);
+talkBtn.addEventListener("mouseup", stopRecording);
+talkBtn.addEventListener("mouseleave", stopRecording);
+
+document.getElementById("rescheduleBtn").addEventListener("click", async () => {
+  const id = document.getElementById("apptId").value.trim();
+  if (!id) return;
+  const res = await fetch(`/doctor/${id}/reschedule`, { method: "POST" });
+  const data = await res.json();
+  document.getElementById("doctorLog").textContent = JSON.stringify(data, null, 2);
+});
+</script>
+</body>
+</html>
